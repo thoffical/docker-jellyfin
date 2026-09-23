@@ -1,45 +1,25 @@
-# syntax=docker/dockerfile:1
+# Switch to the LinuxServer image which handles ARM64 servers flawlessly
+FROM linuxserver/jellyfin:latest
 
-FROM ghcr.io/linuxserver/baseimage-ubuntu:resolute
+# Install rclone and fuse dependencies inside the LinuxServer Ubuntu base
+RUN apt-get update && apt-get install -y rclone fuse3 && rm -rf /var/lib/apt/lists/*
 
-# set version label
-ARG BUILD_DATE
-ARG VERSION
-ARG JELLYFIN_RELEASE
-LABEL build_version="Linuxserver.io version:- ${VERSION} Build-date:- ${BUILD_DATE}"
-LABEL maintainer="thelamer"
+# Cloud web platforms use port 8000 for standard web routing
+EXPOSE 8000
+ENV JELLYFIN_HTTP_PORT=8000
 
-# environment settings
-ARG DEBIAN_FRONTEND="noninteractive"
-ENV NVIDIA_DRIVER_CAPABILITIES="compute,video,utility"
-# https://github.com/dlemstra/Magick.NET/issues/707#issuecomment-785351620
-ENV MALLOC_TRIM_THRESHOLD_=131072
-ENV ATTACHED_DEVICES_PERMS="/dev/dri /dev/dvb /dev/vchiq /dev/vc-mem /dev/video1? -type c"
+# Setup open workspace paths matching LinuxServer directory standards
+RUN mkdir -p /workspace/config /workspace/cache /workspace/data /workspace/music
+RUN chmod -R 777 /workspace
 
-RUN \
-  echo "**** install jellyfin *****" && \
-  curl -s https://repo.jellyfin.org/ubuntu/jellyfin_team.gpg.key | gpg --dearmor | tee /usr/share/keyrings/jellyfin.gpg >/dev/null && \
-  echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/jellyfin.gpg] https://repo.jellyfin.org/ubuntu resolute main' > /etc/apt/sources.list.d/jellyfin.list && \
-  if [ -z ${JELLYFIN_RELEASE+x} ]; then \
-    JELLYFIN_RELEASE=$(curl -sX GET https://repo.jellyfin.org/ubuntu/dists/resolute/main/binary-amd64/Packages |grep -A 7 -m 1 'Package: jellyfin-server' | awk -F ': ' '/Version/{print $2;exit}'); \
-  fi && \
-  apt-get update && \
-  apt-get install -y --no-install-recommends \
-    at \
-    libjemalloc2 \
-    mesa-va-drivers \
-    xmlstarlet && \
-  apt-get install -y --no-install-recommends \
-    jellyfin=${JELLYFIN_RELEASE} && \
-  echo "**** cleanup ****" && \
-  rm -rf \
-    /tmp/* \
-    /var/lib/apt/lists/* \
-    /var/tmp/*
+# Copy your local rclone config token and entry script
+COPY rclone.conf /workspace/rclone.conf
+COPY entrypoint.sh /workspace/entrypoint.sh
+RUN chmod +x /workspace/entrypoint.sh
 
-# add local files
-COPY root/ /
+# LinuxServer images use specific environment variables for directory layouts
+ENV JELLYFIN_DATA_DIR=/workspace/data
+ENV JELLYFIN_CONFIG_DIR=/workspace/config
+ENV JELLYFIN_CACHE_DIR=/workspace/cache
 
-# ports and volumes
-EXPOSE 8096 8920
-VOLUME /config
+ENTRYPOINT ["/workspace/entrypoint.sh"]
