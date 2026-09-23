@@ -1,46 +1,43 @@
-# syntax=docker/dockerfile:1
+# Start directly from an official multi-arch Ubuntu base image
+FROM ubuntu:24.04
 
-FROM ghcr.io/linuxserver/baseimage-ubuntu:arm64v8-resolute
+# Avoid frontend prompts during build
+ENV DEBIAN_FRONTEND=noninteractive
 
-# set version label
-ARG BUILD_DATE
-ARG VERSION
-ARG JELLYFIN_RELEASE
-LABEL build_version="Linuxserver.io version:- ${VERSION} Build-date:- ${BUILD_DATE}"
-LABEL maintainer="thelamer"
+# Install dependencies, rclone, fuse, and the official Jellyfin server packages
+RUN apt-get update && apt-get install -y \
+    curl \
+    gnupg \
+    ca-certificates \
+    rclone \
+    fuse3 \
+    && mkdir -p /usr/share/keyrings \
+    # 1. Grab official Jellyfin GPG Key
+    && curl -fsSL https://jellyfin.org | gpg --dearmor -o /usr/share/keyrings/jellyfin.gpg \
+    # 2. Add the repository layout (autodetects arm64 vs amd64 perfectly)
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/jellyfin.gpg] https://repo.jellyfin.org/ubuntu noble main" | tee /etc/apt/sources.list.d/jellyfin.list \
+    && apt-get update \
+    # 3. Install the actual server cleanly
+    && apt-get install -y jellyfin-server jellyfin-web \
+    # Clean up apt caches to save space
+    && rm -rf /var/lib/apt/lists/*
 
-# environment settings
-ARG DEBIAN_FRONTEND="noninteractive"
-ENV NVIDIA_DRIVER_CAPABILITIES="compute,video,utility"
-# https://github.com/dlemstra/Magick.NET/issues/707#issuecomment-785351620
-ENV MALLOC_TRIM_THRESHOLD_=131072
-ENV ATTACHED_DEVICES_PERMS="/dev/dri /dev/dvb /dev/vchiq /dev/vc-mem /dev/video1? -type c"
+# Map to the platform's default web port
+EXPOSE 8000
+ENV JELLYFIN_HTTP_PORT=8000
 
-RUN \
-  echo "**** install jellyfin *****" && \
-  curl -s https://repo.jellyfin.org/ubuntu/jellyfin_team.gpg.key | gpg --dearmor | tee /usr/share/keyrings/jellyfin.gpg >/dev/null && \
-  echo 'deb [arch=arm64 signed-by=/usr/share/keyrings/jellyfin.gpg] https://repo.jellyfin.org/ubuntu resolute main' > /etc/apt/sources.list.d/jellyfin.list && \
-  if [ -z ${JELLYFIN_RELEASE+x} ]; then \
-    JELLYFIN_RELEASE=$(curl -sX GET https://repo.jellyfin.org/ubuntu/dists/resolute/main/binary-amd64/Packages |grep -A 7 -m 1 'Package: jellyfin-server' | awk -F ': ' '/Version/{print $2;exit}'); \
-  fi && \
-  apt-get update && \
-  apt-get install -y --no-install-recommends \
-    at \
-    libjemalloc2 \
-    mesa-va-drivers \
-    xmlstarlet && \
-  apt-get install -y --no-install-recommends \
-    jellyfin=${JELLYFIN_RELEASE} && \
-  printf "Linuxserver.io version: ${VERSION}\nBuild-date: ${BUILD_DATE}" > /build_version && \
-  echo "**** cleanup ****" && \
-  rm -rf \
-    /tmp/* \
-    /var/lib/apt/lists/* \
-    /var/tmp/*
+# Set up application environment layouts
+RUN mkdir -p /workspace/config /workspace/cache /workspace/data /workspace/music
+RUN chmod -R 777 /workspace
 
-# add local files
-COPY root/ /
+# Copy your configuration maps and the launch scripts
+COPY rclone.conf /workspace/rclone.conf
+COPY entrypoint.sh /workspace/entrypoint.sh
+RUN chmod +x /workspace/entrypoint.sh
 
-# ports and volumes
-EXPOSE 8096 8920
-VOLUME /config
+# Pass application locations down to Jellyfin
+ENV JELLYFIN_DATA_DIR=/workspace/data
+ENV JELLYFIN_CONFIG_DIR=/workspace/config
+ENV JELLYFIN_CACHE_DIR=/workspace/cache
+
+ENTRYPOINT ["/workspace/entrypoint.sh"]
